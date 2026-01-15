@@ -1,0 +1,15 @@
+{
+  "name": "@code-rag/shared",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./schemas/index.ts",
+  "types": "./schemas/index.ts",
+  "exports": {
+    ".": "./schemas/index.ts",
+    "./schemas": "./schemas/index.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
+
