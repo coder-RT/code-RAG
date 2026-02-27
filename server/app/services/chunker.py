@@ -55,6 +55,9 @@ class Chunker:
         self.chunk_overlap = chunk_overlap
         self.min_chunk_size = min_chunk_size
     
+    # Maximum line length before skipping (prevent regex catastrophic backtracking)
+    MAX_LINE_LENGTH = 50000
+    
     def chunk_file(self, file: LoadedFile) -> List[Chunk]:
         """
         Chunk a file based on its type.
@@ -65,6 +68,11 @@ class Chunker:
         Returns:
             List of Chunk objects
         """
+        # Safety check: skip files with extremely long lines
+        for line in file.content.split('\n'):
+            if len(line) > self.MAX_LINE_LENGTH:
+                return []
+        
         if file.file_type == FileType.PYTHON:
             return self._chunk_python(file)
         elif file.file_type == FileType.TERRAFORM:
@@ -93,9 +101,20 @@ class Chunker:
             List of all chunks from all files
         """
         all_chunks = []
-        for file in files:
-            chunks = self.chunk_file(file)
-            all_chunks.extend(chunks)
+        total = len(files)
+        
+        for i, file in enumerate(files):
+            try:
+                # Debug: print before processing files after 3000
+                if i >= 3000:
+                    print(f"   [{i+1}/{total}] Starting: {file.relative_path}", flush=True)
+                chunks = self.chunk_file(file)
+                all_chunks.extend(chunks)
+                if (i + 1) % 1000 == 0:
+                    print(f"   Chunked {i + 1}/{total} files...")
+            except Exception as e:
+                print(f"   Warning: failed to chunk {file.relative_path}: {e}")
+        
         return all_chunks
     
     # =========================================================================
@@ -495,8 +514,9 @@ class Chunker:
         # Split by paragraphs/sections
         start = 0
         chunk_index = 0
+        max_iterations = len(content) // 100 + 100  # Safety limit
         
-        while start < len(content):
+        while start < len(content) and chunk_index < max_iterations:
             end = min(start + self.default_chunk_size, len(content))
             
             # Try to break at a newline
@@ -524,8 +544,11 @@ class Chunker:
                     metadata={**file.metadata, "chunk_index": chunk_index}
                 ))
             
-            # Move start with overlap
-            start = end - self.chunk_overlap if end < len(content) else end
+            # Move start with overlap, ensure forward progress
+            new_start = end - self.chunk_overlap if end < len(content) else end
+            if new_start <= start:
+                new_start = start + 1  # Force forward progress
+            start = new_start
             chunk_index += 1
         
         return chunks
@@ -533,6 +556,9 @@ class Chunker:
     # =========================================================================
     # Helpers
     # =========================================================================
+    
+    # Max chunk size to stay within OpenAI embedding token limits (~8192 tokens)
+    MAX_CHUNK_CHARS = 6000
     
     def _create_chunk(
         self,
@@ -547,6 +573,11 @@ class Chunker:
         metadata = {**file.metadata}
         if extra_metadata:
             metadata.update(extra_metadata)
+        
+        # Truncate overly large chunks to stay within embedding token limits
+        if len(content) > self.MAX_CHUNK_CHARS:
+            content = content[:self.MAX_CHUNK_CHARS] + "\n... (truncated)"
+            metadata["truncated"] = True
         
         return Chunk(
             content=content,

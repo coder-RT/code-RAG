@@ -2,6 +2,7 @@
 RAG Engine - Core RAG functionality for code understanding
 """
 
+import asyncio
 from typing import List, Dict, Optional
 
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
@@ -10,23 +11,62 @@ from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain.schema import Document
 
-from app.core.config import settings
+from app.core.config import settings, EmbeddingProvider
 from app.services.loader import FileLoader, LoadedFile
 from app.services.chunker import Chunker, Chunk
+
+
+def get_embeddings(provider: Optional[str] = None):
+    """
+    Get the embedding model.
+    Supports OpenAI and HuggingFace (Jina) embeddings.
+    
+    Args:
+        provider: "openai" or "huggingface". Defaults to settings.EMBEDDING_PROVIDER.
+    """
+    use_huggingface = (
+        provider == "huggingface" or 
+        (provider is None and settings.EMBEDDING_PROVIDER == EmbeddingProvider.HUGGINGFACE)
+    )
+    
+    if use_huggingface:
+        from langchain_community.embeddings import HuggingFaceEmbeddings
+        
+        print(f"🔧 Using HuggingFace embeddings: {settings.HUGGINGFACE_EMBEDDING_MODEL}")
+        print(f"   Device: {settings.EMBEDDING_DEVICE}")
+        print("   (First load may take a few minutes to download the model...)")
+        
+        return HuggingFaceEmbeddings(
+            model_name=settings.HUGGINGFACE_EMBEDDING_MODEL,
+            model_kwargs={"device": settings.EMBEDDING_DEVICE, "trust_remote_code": True},
+            encode_kwargs={"normalize_embeddings": True}
+        )
+    else:
+        print(f"🔧 Using OpenAI embeddings: {settings.EMBEDDING_MODEL}")
+        return OpenAIEmbeddings(
+            model=settings.EMBEDDING_MODEL,
+            openai_api_key=settings.OPENAI_API_KEY,
+            openai_api_base=settings.OPENAI_BASE_URL
+        )
 
 
 class RAGEngine:
     """
     RAG Engine for indexing and querying codebases.
     Uses FileLoader for loading, Chunker for smart chunking,
-    ChromaDB for vector storage, and OpenAI for embeddings/LLM.
+    ChromaDB for vector storage, and configurable embeddings.
     """
     
-    def __init__(self):
-        self.embeddings = OpenAIEmbeddings(
-            model=settings.EMBEDDING_MODEL,
-            openai_api_key=settings.OPENAI_API_KEY
-        )
+    def __init__(self, embedding_provider: Optional[str] = None, project_name: Optional[str] = None):
+        """
+        Initialize RAG Engine.
+        
+        Args:
+            embedding_provider: "openai" or "huggingface". Defaults to config setting.
+            project_name: Project name to use as ChromaDB collection name.
+        """
+        self.embedding_provider = embedding_provider
+        self.embeddings = get_embeddings(provider=embedding_provider)
         self.llm = ChatOpenAI(
             model=settings.LLM_MODEL,
             openai_api_key=settings.OPENAI_API_KEY,
@@ -35,10 +75,13 @@ class RAGEngine:
         self.loader = FileLoader(max_file_size_kb=settings.MAX_FILE_SIZE_KB)
         self.chunker = Chunker()
         self.vectorstore = None
+        # Use project_name as collection name, fallback to default
+        self.collection_name = project_name or settings.CHROMA_COLLECTION_NAME
     
     async def index_codebase(
         self,
         path: str,
+        project_name: Optional[str] = None,
         include_patterns: Optional[List[str]] = None,
         exclude_patterns: Optional[List[str]] = None
     ) -> Dict:
@@ -53,9 +96,11 @@ class RAGEngine:
         if exclude_patterns:
             self.loader.exclude_patterns = exclude_patterns
         
-        # Step 1: Load all files
+        # Step 1: Load all files (run in thread to avoid blocking)
         print(f"📂 Loading files from {path}...")
-        loaded_files: List[LoadedFile] = self.loader.load_directory(path)
+        loaded_files: List[LoadedFile] = await asyncio.to_thread(
+            self.loader.load_directory, path
+        )
         
         if not loaded_files:
             return {
@@ -69,9 +114,11 @@ class RAGEngine:
         load_stats = self.loader.get_stats(loaded_files)
         print(f"📄 Loaded {load_stats['total_files']} files")
         
-        # Step 2: Chunk files based on their type
+        # Step 2: Chunk files based on their type (run in thread to avoid blocking)
         print("✂️  Chunking files...")
-        chunks: List[Chunk] = self.chunker.chunk_files(loaded_files)
+        chunks: List[Chunk] = await asyncio.to_thread(
+            self.chunker.chunk_files, loaded_files
+        )
         
         # Get chunking stats
         chunk_stats = self.chunker.get_stats(chunks)
@@ -102,13 +149,18 @@ class RAGEngine:
                 metadata=metadata
             ))
         
-        # Step 4: Create vector store
-        print("🧠 Generating embeddings and storing in ChromaDB...")
-        self.vectorstore = Chroma.from_documents(
+        # Update collection name if project_name is provided
+        if project_name:
+            self.collection_name = project_name
+        
+        # Step 4: Create vector store (run in thread - embedding is CPU intensive)
+        print(f"🧠 Generating embeddings and storing in ChromaDB (collection: {self.collection_name})...")
+        self.vectorstore = await asyncio.to_thread(
+            Chroma.from_documents,
             documents=documents,
             embedding=self.embeddings,
             persist_directory=settings.CHROMA_PERSIST_DIRECTORY,
-            collection_name=settings.CHROMA_COLLECTION_NAME
+            collection_name=self.collection_name
         )
         
         print("✅ Indexing complete!")
@@ -137,7 +189,7 @@ class RAGEngine:
             self.vectorstore = Chroma(
                 persist_directory=settings.CHROMA_PERSIST_DIRECTORY,
                 embedding_function=self.embeddings,
-                collection_name=settings.CHROMA_COLLECTION_NAME
+                collection_name=self.collection_name
             )
         
         # Custom prompt for code understanding
@@ -206,7 +258,7 @@ Answer:"""
             self.vectorstore = Chroma(
                 persist_directory=settings.CHROMA_PERSIST_DIRECTORY,
                 embedding_function=self.embeddings,
-                collection_name=settings.CHROMA_COLLECTION_NAME
+                collection_name=self.collection_name
             )
         
         docs = self.vectorstore.similarity_search(query, k=k)
@@ -236,7 +288,7 @@ Answer:"""
             self.vectorstore = Chroma(
                 persist_directory=settings.CHROMA_PERSIST_DIRECTORY,
                 embedding_function=self.embeddings,
-                collection_name=settings.CHROMA_COLLECTION_NAME
+                collection_name=self.collection_name
             )
         
         # Get docs with scores
@@ -269,7 +321,7 @@ Answer:"""
             self.vectorstore = Chroma(
                 persist_directory=settings.CHROMA_PERSIST_DIRECTORY,
                 embedding_function=self.embeddings,
-                collection_name=settings.CHROMA_COLLECTION_NAME
+                collection_name=self.collection_name
             )
         
         # Use metadata filtering
@@ -302,7 +354,7 @@ Answer:"""
             self.vectorstore = Chroma(
                 persist_directory=settings.CHROMA_PERSIST_DIRECTORY,
                 embedding_function=self.embeddings,
-                collection_name=settings.CHROMA_COLLECTION_NAME
+                collection_name=self.collection_name
             )
         
         docs = self.vectorstore.similarity_search(

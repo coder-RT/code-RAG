@@ -23,6 +23,12 @@ class VectorDBProvider(str, Enum):
     QDRANT = "qdrant"
 
 
+class EmbeddingProvider(str, Enum):
+    """Supported embedding providers"""
+    OPENAI = "openai"
+    HUGGINGFACE = "huggingface"
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
     
@@ -43,9 +49,21 @@ class Settings(BaseSettings):
     LLM_PROVIDER: LLMProvider = LLMProvider.OPENAI
     
     # =========================================================================
+    # Embedding Provider Selection
+    # =========================================================================
+    EMBEDDING_PROVIDER: EmbeddingProvider = EmbeddingProvider.HUGGINGFACE
+    
+    # =========================================================================
+    # HuggingFace Embeddings (Local - No API Key Required)
+    # =========================================================================
+    HUGGINGFACE_EMBEDDING_MODEL: str = "jinaai/jina-embeddings-v2-base-code"
+    EMBEDDING_DEVICE: str = "cpu"  # "cpu" or "cuda"
+    
+    # =========================================================================
     # OpenAI Configuration
     # =========================================================================
     OPENAI_API_KEY: str = ""
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     LLM_MODEL: str = "gpt-4o"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     
@@ -133,6 +151,12 @@ class Settings(BaseSettings):
     # =========================================================================
     AGENT_MAX_ITERATIONS: int = 10
     AGENT_TEMPERATURE: float = 0.1
+    
+    # =========================================================================
+    # Celery Configuration
+    # =========================================================================
+    CELERY_BROKER_URL: str = "redis://localhost:6379/0"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
     
     # =========================================================================
     # Security (Production)

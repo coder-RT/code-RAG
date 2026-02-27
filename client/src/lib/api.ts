@@ -13,6 +13,28 @@ export interface CodebaseResponse {
   data: Record<string, unknown> | null
 }
 
+export interface TaskStatusResponse {
+  task_id: string
+  status: string
+  progress?: number
+  stage?: string
+  message?: string
+  result?: Record<string, unknown>
+}
+
+export interface IndexOptions {
+  path: string
+  projectName?: string
+  excludePatterns?: string[]
+  asyncMode?: boolean
+  embeddingProvider?: 'openai' | 'huggingface'
+}
+
+export interface Project {
+  name: string
+  count: number
+}
+
 export interface GraphData {
   nodes: Array<{
     id: string
@@ -39,16 +61,33 @@ export const api = {
   health: () => client.get('/health'),
 
   // Codebase endpoints
-  indexCodebase: (path: string, excludePatterns?: string[]) =>
+  indexCodebase: (options: IndexOptions) =>
     client.post<CodebaseResponse>('/codebase/index', {
-      path,
-      exclude_patterns: excludePatterns,
+      path: options.path,
+      project_name: options.projectName,
+      exclude_patterns: options.excludePatterns,
+      async_mode: options.asyncMode ?? false,
+      embedding_provider: options.embeddingProvider ?? 'openai',
     }),
+  
+  // Get indexed projects
+  getProjects: () =>
+    client.get<CodebaseResponse>('/codebase/projects'),
+  
+  // Delete a project
+  deleteProject: (projectName: string) =>
+    client.delete<CodebaseResponse>(`/codebase/projects/${projectName}`),
 
-  queryCodebase: (question: string, contextLimit = 5) =>
+  // Task status (for async indexing)
+  getTaskStatus: (taskId: string) =>
+    client.get<TaskStatusResponse>(`/codebase/task/${taskId}`),
+
+  queryCodebase: (question: string, projectName: string, contextLimit = 5, embeddingProvider = 'openai') =>
     client.post<CodebaseResponse>('/codebase/query', {
       question,
+      project_name: projectName,
       context_limit: contextLimit,
+      embedding_provider: embeddingProvider,
     }),
 
   explainCode: (path: string, detailLevel = 'summary') =>

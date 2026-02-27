@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Bot, User, Loader2, Sparkles } from 'lucide-react'
+import { Send, Bot, User, Loader2, Sparkles, ChevronDown, Database } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { api } from '@/lib/api'
+import { api, Project } from '@/lib/api'
 
 interface Message {
   id: string
@@ -18,7 +18,28 @@ export default function ChatInterface() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [projects, setProjects] = useState<Project[]>([])
+  const [selectedProject, setSelectedProject] = useState<string>('')
+  const [projectsLoading, setProjectsLoading] = useState(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const fetchProjects = async () => {
+      try {
+        const response = await api.getProjects()
+        const data = response.data.data as { projects: Project[] }
+        setProjects(data?.projects || [])
+        if (data?.projects?.length > 0) {
+          setSelectedProject(data.projects[0].name)
+        }
+      } catch (error) {
+        console.error('Failed to fetch projects:', error)
+      } finally {
+        setProjectsLoading(false)
+      }
+    }
+    fetchProjects()
+  }, [])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -29,7 +50,7 @@ export default function ChatInterface() {
   }, [messages])
 
   const sendMessage = async () => {
-    if (!input.trim() || isLoading) return
+    if (!input.trim() || isLoading || !selectedProject) return
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -43,13 +64,14 @@ export default function ChatInterface() {
     setIsLoading(true)
 
     try {
-      const response = await api.queryCodebase(input)
+      const response = await api.queryCodebase(input, selectedProject)
+      const data = response.data.data as { answer: string; sources?: { file: string; snippet: string }[] }
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: response.data.answer,
-        sources: response.data.sources,
+        content: data?.answer || 'No answer received',
+        sources: data?.sources,
         timestamp: new Date(),
       }
 
@@ -193,18 +215,45 @@ export default function ChatInterface() {
 
       {/* Input Area */}
       <div className="p-4 border-t border-carbon-700">
+        {/* Project Selector */}
+        <div className="mb-3 flex items-center gap-2">
+          <Database className="w-4 h-4 text-carbon-400" />
+          <span className="text-sm text-carbon-400">Project:</span>
+          {projectsLoading ? (
+            <span className="text-sm text-carbon-500">Loading projects...</span>
+          ) : projects.length === 0 ? (
+            <span className="text-sm text-carbon-500">No indexed projects. Index a codebase first.</span>
+          ) : (
+            <div className="relative">
+              <select
+                value={selectedProject}
+                onChange={(e) => setSelectedProject(e.target.value)}
+                className="appearance-none bg-carbon-900 border border-carbon-700 rounded-lg px-3 py-1.5 pr-8 text-sm text-white focus:outline-none focus:border-accent-cyan cursor-pointer"
+              >
+                {projects.map((project) => (
+                  <option key={project.name} value={project.name}>
+                    {project.name} ({project.count} chunks)
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-carbon-400 pointer-events-none" />
+            </div>
+          )}
+        </div>
+        
         <div className="flex gap-3">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyPress={handleKeyPress}
-            placeholder="Ask about the codebase..."
+            placeholder={selectedProject ? `Ask about ${selectedProject}...` : "Select a project first..."}
             rows={1}
-            className="flex-1 bg-carbon-900 border border-carbon-700 rounded-xl px-4 py-3 text-white placeholder-carbon-500 focus:outline-none focus:border-accent-cyan resize-none"
+            disabled={!selectedProject}
+            className="flex-1 bg-carbon-900 border border-carbon-700 rounded-xl px-4 py-3 text-white placeholder-carbon-500 focus:outline-none focus:border-accent-cyan resize-none disabled:opacity-50 disabled:cursor-not-allowed"
           />
           <button
             onClick={sendMessage}
-            disabled={!input.trim() || isLoading}
+            disabled={!input.trim() || isLoading || !selectedProject}
             className="px-4 py-3 rounded-xl bg-gradient-to-r from-accent-cyan to-accent-violet text-white font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity"
           >
             <Send className="w-5 h-5" />

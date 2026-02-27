@@ -3,6 +3,7 @@ Loader - Load files by type with appropriate parsing
 """
 
 import os
+import fnmatch
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,15 +79,32 @@ class FileLoader:
         "dist", "build", ".next", ".terraform", "vendor",
         ".idea", ".vscode", "coverage", ".pytest_cache",
         ".mypy_cache", ".tox", "eggs", "*.egg-info",
-        ".cache", ".gradle", "target"
+        ".cache", ".gradle", "target",
+        # Generated/bundled files
+        "*.min.js", "*.min.css", "*.bundle.js", "*.bundle.css",
+        "*.chunk.js", "*.chunk.css", "*.map",
+        # Asset files that may contain embedded data
+        "*.svg.tsx", "*.svg.jsx", "*.svg.ts", "*.svg.js",
+        # Lock files
+        "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+        # Other generated directories
+        ".turbo", ".parcel-cache", ".webpack", "storybook-static",
+        # Translation/i18n directories (not useful for code search)
+        "i18n", "locales", "translations", "lang",
+        # Database migrations and scripts (not useful for code search)
+        "migrations", "scripts", "*.sql",
+        # Test data and fixtures (often large config files)
+        "e2e-tests", "fixtures", "testdata", "__snapshots__"
     ]
     
     def __init__(
         self,
         max_file_size_kb: int = 500,
+        max_line_length: int = 50000,
         exclude_patterns: Optional[List[str]] = None
     ):
         self.max_file_size_kb = max_file_size_kb
+        self.max_line_length = max_line_length
         self.exclude_patterns = exclude_patterns or self.DEFAULT_EXCLUDE
     
     def load_directory(self, path: str) -> List[LoadedFile]:
@@ -159,6 +177,12 @@ class FileLoader:
         if not content.strip():
             return None
         
+        # Skip files with extremely long lines (likely minified/base64 content)
+        if self.max_line_length > 0:
+            for line in content.split('\n'):
+                if len(line) > self.max_line_length:
+                    return None
+        
         # Build relative path
         if base_path:
             try:
@@ -185,11 +209,15 @@ class FileLoader:
         """Walk directory, respecting exclude patterns."""
         for root, dirs, files in os.walk(base_path):
             # Filter excluded directories (modify in place)
-            dirs[:] = [d for d in dirs if not self._should_exclude(d)]
+            dirs[:] = [d for d in dirs if not self._should_exclude(d, is_dir=True)]
             
             for file in files:
                 # Skip hidden files
                 if file.startswith('.'):
+                    continue
+                
+                # Skip excluded files
+                if self._should_exclude(file, is_dir=False):
                     continue
                 
                 file_path = Path(root) / file
@@ -198,11 +226,21 @@ class FileLoader:
                 if self._detect_file_type(file_path) != FileType.UNKNOWN:
                     yield file_path
     
-    def _should_exclude(self, name: str) -> bool:
-        """Check if a directory should be excluded."""
+    def _should_exclude(self, name: str, is_dir: bool = True) -> bool:
+        """Check if a file or directory should be excluded."""
         if name.startswith('.'):
             return True
-        return name in self.exclude_patterns
+        
+        for pattern in self.exclude_patterns:
+            # Glob pattern (contains *)
+            if '*' in pattern:
+                if fnmatch.fnmatch(name, pattern):
+                    return True
+            # Exact name match
+            elif name == pattern:
+                return True
+        
+        return False
     
     def _detect_file_type(self, path: Path) -> FileType:
         """Detect the file type from path."""
