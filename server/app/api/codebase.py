@@ -29,6 +29,36 @@ class QueryRequest(BaseModel):
     project_name: str  # Which project to query
     context_limit: int = 5
     embedding_provider: Optional[str] = "openai"  # Must match what was used during indexing
+    llm_model: Optional[str] = "gpt-4o"  # LLM model to use for answering
+
+
+# Available LLM models for query answering
+AVAILABLE_MODELS = [
+    {
+        "id": "gpt-4o",
+        "name": "GPT-4o",
+        "description": "Most capable, best for complex code analysis",
+        "provider": "openai"
+    },
+    {
+        "id": "gpt-4o-mini",
+        "name": "GPT-4o Mini",
+        "description": "Fast and efficient, good balance of speed and quality",
+        "provider": "openai"
+    },
+    {
+        "id": "gpt-4-turbo",
+        "name": "GPT-4 Turbo",
+        "description": "High capability with larger context window",
+        "provider": "openai"
+    },
+    {
+        "id": "gpt-3.5-turbo",
+        "name": "GPT-3.5 Turbo",
+        "description": "Fastest and most economical option",
+        "provider": "openai"
+    },
+]
 
 
 class ExplainRequest(BaseModel):
@@ -155,6 +185,18 @@ async def get_task_status(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/models", response_model=CodebaseResponse)
+async def get_available_models():
+    """
+    Get list of available LLM models for query answering.
+    """
+    return CodebaseResponse(
+        success=True,
+        message=f"Found {len(AVAILABLE_MODELS)} available models",
+        data={"models": AVAILABLE_MODELS}
+    )
+
+
 @router.post("/query", response_model=CodebaseResponse)
 async def query_codebase(request: QueryRequest):
     """
@@ -164,7 +206,8 @@ async def query_codebase(request: QueryRequest):
     try:
         rag_engine = RAGEngine(
             embedding_provider=request.embedding_provider,
-            project_name=request.project_name
+            project_name=request.project_name,
+            llm_model=request.llm_model
         )
         result = await rag_engine.query(
             question=request.question,
@@ -174,7 +217,7 @@ async def query_codebase(request: QueryRequest):
         return CodebaseResponse(
             success=True,
             message="Query processed successfully",
-            data={"answer": result["answer"], "sources": result["sources"]}
+            data={"answer": result["answer"], "sources": result["sources"], "model_used": request.llm_model}
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -35,6 +35,13 @@ export interface Project {
   count: number
 }
 
+export interface LLMModel {
+  id: string
+  name: string
+  description: string
+  provider: string
+}
+
 export interface GraphData {
   nodes: Array<{
     id: string
@@ -78,14 +85,25 @@ export const api = {
   deleteProject: (projectName: string) =>
     client.delete<CodebaseResponse>(`/codebase/projects/${projectName}`),
 
+  // Get available LLM models
+  getModels: () =>
+    client.get<CodebaseResponse>('/codebase/models'),
+
   // Task status (for async indexing)
   getTaskStatus: (taskId: string) =>
     client.get<TaskStatusResponse>(`/codebase/task/${taskId}`),
 
-  queryCodebase: (question: string, projectName: string, contextLimit = 5, embeddingProvider = 'openai') =>
+  queryCodebase: (
+    question: string, 
+    projectName: string, 
+    llmModel = 'gpt-4o',
+    contextLimit = 5, 
+    embeddingProvider = 'openai'
+  ) =>
     client.post<CodebaseResponse>('/codebase/query', {
       question,
       project_name: projectName,
+      llm_model: llmModel,
       context_limit: contextLimit,
       embedding_provider: embeddingProvider,
     }),

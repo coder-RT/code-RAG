@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Bot, User, Loader2, Sparkles, ChevronDown, Database, FileCode, ChevronRight } from 'lucide-react'
+import { Send, Bot, User, Loader2, Sparkles, ChevronDown, Database, FileCode, ChevronRight, Cpu } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { api, Project } from '@/lib/api'
+import { api, Project, LLMModel } from '@/lib/api'
 
 interface Message {
   id: string
@@ -22,24 +22,37 @@ export default function ChatInterface() {
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedProject, setSelectedProject] = useState<string>('')
   const [projectsLoading, setProjectsLoading] = useState(true)
+  const [models, setModels] = useState<LLMModel[]>([])
+  const [selectedModel, setSelectedModel] = useState<string>('gpt-4o')
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const fetchProjects = async () => {
+    const fetchData = async () => {
+      // Fetch projects and models in parallel
       try {
-        const response = await api.getProjects()
-        const data = response.data.data as { projects: Project[] }
-        setProjects(data?.projects || [])
-        if (data?.projects?.length > 0) {
-          setSelectedProject(data.projects[0].name)
+        const [projectsRes, modelsRes] = await Promise.all([
+          api.getProjects(),
+          api.getModels()
+        ])
+        
+        const projectsData = projectsRes.data.data as { projects: Project[] }
+        setProjects(projectsData?.projects || [])
+        if (projectsData?.projects?.length > 0) {
+          setSelectedProject(projectsData.projects[0].name)
+        }
+        
+        const modelsData = modelsRes.data.data as { models: LLMModel[] }
+        setModels(modelsData?.models || [])
+        if (modelsData?.models?.length > 0) {
+          setSelectedModel(modelsData.models[0].id)
         }
       } catch (error) {
-        console.error('Failed to fetch projects:', error)
+        console.error('Failed to fetch data:', error)
       } finally {
         setProjectsLoading(false)
       }
     }
-    fetchProjects()
+    fetchData()
   }, [])
 
   const scrollToBottom = () => {
@@ -65,8 +78,8 @@ export default function ChatInterface() {
     setIsLoading(true)
 
     try {
-      const response = await api.queryCodebase(input, selectedProject)
-      const data = response.data.data as { answer: string; sources?: { file: string; snippet: string }[] }
+      const response = await api.queryCodebase(input, selectedProject, selectedModel)
+      const data = response.data.data as { answer: string; sources?: { file: string; snippet: string }[]; model_used?: string }
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -359,30 +372,53 @@ export default function ChatInterface() {
 
       {/* Input Area */}
       <div className="p-4 border-t border-carbon-700">
-        {/* Project Selector */}
-        <div className="mb-3 flex items-center gap-2">
-          <Database className="w-4 h-4 text-carbon-400" />
-          <span className="text-sm text-carbon-400">Project:</span>
-          {projectsLoading ? (
-            <span className="text-sm text-carbon-500">Loading projects...</span>
-          ) : projects.length === 0 ? (
-            <span className="text-sm text-carbon-500">No indexed projects. Index a codebase first.</span>
-          ) : (
+        {/* Project & Model Selectors */}
+        <div className="mb-3 flex flex-wrap items-center gap-4">
+          {/* Project Selector */}
+          <div className="flex items-center gap-2">
+            <Database className="w-4 h-4 text-carbon-400" />
+            <span className="text-sm text-carbon-400">Project:</span>
+            {projectsLoading ? (
+              <span className="text-sm text-carbon-500">Loading...</span>
+            ) : projects.length === 0 ? (
+              <span className="text-sm text-carbon-500">No indexed projects</span>
+            ) : (
+              <div className="relative">
+                <select
+                  value={selectedProject}
+                  onChange={(e) => setSelectedProject(e.target.value)}
+                  className="appearance-none bg-carbon-900 border border-carbon-700 rounded-lg px-3 py-1.5 pr-8 text-sm text-white focus:outline-none focus:border-accent-cyan cursor-pointer"
+                >
+                  {projects.map((project) => (
+                    <option key={project.name} value={project.name}>
+                      {project.name} ({project.count} chunks)
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-carbon-400 pointer-events-none" />
+              </div>
+            )}
+          </div>
+
+          {/* Model Selector */}
+          <div className="flex items-center gap-2">
+            <Cpu className="w-4 h-4 text-carbon-400" />
+            <span className="text-sm text-carbon-400">Model:</span>
             <div className="relative">
               <select
-                value={selectedProject}
-                onChange={(e) => setSelectedProject(e.target.value)}
-                className="appearance-none bg-carbon-900 border border-carbon-700 rounded-lg px-3 py-1.5 pr-8 text-sm text-white focus:outline-none focus:border-accent-cyan cursor-pointer"
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="appearance-none bg-carbon-900 border border-carbon-700 rounded-lg px-3 py-1.5 pr-8 text-sm text-white focus:outline-none focus:border-accent-violet cursor-pointer"
               >
-                {projects.map((project) => (
-                  <option key={project.name} value={project.name}>
-                    {project.name} ({project.count} chunks)
+                {models.map((model) => (
+                  <option key={model.id} value={model.id} title={model.description}>
+                    {model.name}
                   </option>
                 ))}
               </select>
               <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-carbon-400 pointer-events-none" />
             </div>
-          )}
+          </div>
         </div>
         
         <div className="flex gap-3">

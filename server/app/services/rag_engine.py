@@ -57,18 +57,25 @@ class RAGEngine:
     ChromaDB for vector storage, and configurable embeddings.
     """
     
-    def __init__(self, embedding_provider: Optional[str] = None, project_name: Optional[str] = None):
+    def __init__(
+        self, 
+        embedding_provider: Optional[str] = None, 
+        project_name: Optional[str] = None,
+        llm_model: Optional[str] = None
+    ):
         """
         Initialize RAG Engine.
         
         Args:
             embedding_provider: "openai" or "huggingface". Defaults to config setting.
             project_name: Project name to use as ChromaDB collection name.
+            llm_model: LLM model to use for answering queries. Defaults to settings.LLM_MODEL.
         """
         self.embedding_provider = embedding_provider
         self.embeddings = get_embeddings(provider=embedding_provider)
+        self.llm_model = llm_model or settings.LLM_MODEL
         self.llm = ChatOpenAI(
-            model=settings.LLM_MODEL,
+            model=self.llm_model,
             openai_api_key=settings.OPENAI_API_KEY,
             temperature=0.1
         )
