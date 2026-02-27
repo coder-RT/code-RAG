@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   ChevronRight, 
@@ -7,7 +7,9 @@ import {
   Plus, 
   Trash2, 
   FolderOpen,
-  MoreHorizontal
+  Pencil,
+  Check,
+  X
 } from 'lucide-react'
 import { useChatStore, Conversation } from '@/stores/chatStore'
 import { Project } from '@/lib/api'
@@ -33,6 +35,7 @@ export default function ChatSidebar({
     setActiveConversation,
     createConversation,
     deleteConversation,
+    renameConversation,
     getProjectConversations,
   } = useChatStore()
 
@@ -65,6 +68,12 @@ export default function ChatSidebar({
     e.stopPropagation()
     if (confirm('Delete this conversation?')) {
       deleteConversation(projectName, convId)
+    }
+  }
+
+  const handleRenameConversation = (projectName: string, convId: string, newTitle: string) => {
+    if (newTitle.trim()) {
+      renameConversation(projectName, convId, newTitle.trim())
     }
   }
 
@@ -173,6 +182,7 @@ export default function ChatSidebar({
                                 onLeave={() => setHoveredConv(null)}
                                 onClick={() => handleConversationClick(project.name, conv.id)}
                                 onDelete={(e) => handleDeleteConversation(project.name, conv.id, e)}
+                                onRename={(newTitle) => handleRenameConversation(project.name, conv.id, newTitle)}
                               />
                             ))
                           )}
@@ -198,6 +208,7 @@ interface ConversationItemProps {
   onLeave: () => void
   onClick: () => void
   onDelete: (e: React.MouseEvent) => void
+  onRename: (newTitle: string) => void
 }
 
 function ConversationItem({
@@ -208,7 +219,81 @@ function ConversationItem({
   onLeave,
   onClick,
   onDelete,
+  onRename,
 }: ConversationItemProps) {
+  const [isEditing, setIsEditing] = useState(false)
+  const [editTitle, setEditTitle] = useState(conversation.title)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [isEditing])
+
+  const handleStartEdit = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setEditTitle(conversation.title)
+    setIsEditing(true)
+  }
+
+  const handleSaveEdit = (e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    if (editTitle.trim() && editTitle !== conversation.title) {
+      onRename(editTitle.trim())
+    }
+    setIsEditing(false)
+  }
+
+  const handleCancelEdit = (e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    setEditTitle(conversation.title)
+    setIsEditing(false)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    e.stopPropagation()
+    if (e.key === 'Enter') {
+      handleSaveEdit()
+    } else if (e.key === 'Escape') {
+      handleCancelEdit()
+    }
+  }
+
+  if (isEditing) {
+    return (
+      <div
+        className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-carbon-800 border border-carbon-600"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <input
+          ref={inputRef}
+          type="text"
+          value={editTitle}
+          onChange={(e) => setEditTitle(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onBlur={() => handleSaveEdit()}
+          className="flex-1 bg-transparent text-sm text-white outline-none min-w-0"
+        />
+        <button
+          onClick={handleSaveEdit}
+          className="p-1 hover:bg-carbon-700 text-accent-emerald rounded transition-colors"
+          title="Save"
+        >
+          <Check className="w-3 h-3" />
+        </button>
+        <button
+          onClick={handleCancelEdit}
+          className="p-1 hover:bg-carbon-700 text-carbon-400 rounded transition-colors"
+          title="Cancel"
+        >
+          <X className="w-3 h-3" />
+        </button>
+      </div>
+    )
+  }
+
   return (
     <div
       onClick={onClick}
@@ -230,13 +315,22 @@ function ConversationItem({
       </span>
 
       {(isHovered || isActive) && (
-        <button
-          onClick={onDelete}
-          className="p-1 hover:bg-carbon-700 hover:text-accent-rose rounded transition-colors"
-          title="Delete conversation"
-        >
-          <Trash2 className="w-3 h-3" />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={handleStartEdit}
+            className="p-1 hover:bg-carbon-700 hover:text-accent-cyan rounded transition-colors"
+            title="Rename conversation"
+          >
+            <Pencil className="w-3 h-3" />
+          </button>
+          <button
+            onClick={onDelete}
+            className="p-1 hover:bg-carbon-700 hover:text-accent-rose rounded transition-colors"
+            title="Delete conversation"
+          >
+            <Trash2 className="w-3 h-3" />
+          </button>
+        </div>
       )}
     </div>
   )
