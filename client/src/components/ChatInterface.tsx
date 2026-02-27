@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Bot, User, Loader2, Sparkles, ChevronDown, FileCode, ChevronRight, Cpu, Plus, Database } from 'lucide-react'
+import { Send, Bot, User, Loader2, Sparkles, ChevronDown, FileCode, ChevronRight, Cpu, Plus, Database, Paperclip, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
@@ -17,6 +17,8 @@ export default function ChatInterface() {
   const [projectsLoading, setProjectsLoading] = useState(true)
   const [models, setModels] = useState<LLMModel[]>([])
   const [selectedModel, setSelectedModel] = useState<string>('gpt-4o')
+  const [userContext, setUserContext] = useState('')
+  const [showContextInput, setShowContextInput] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Zustand store for persistent conversations
@@ -37,18 +39,28 @@ export default function ChatInterface() {
 
   const messages = activeConversation?.messages || []
 
+  const fetchProjects = async () => {
+    try {
+      const projectsRes = await api.getProjects()
+      const projectsData = projectsRes.data.data as { projects: Project[] }
+      setProjects(projectsData?.projects || [])
+      return projectsData?.projects || []
+    } catch (error) {
+      console.error('Failed to fetch projects:', error)
+      return []
+    }
+  }
+
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [projectsRes, modelsRes] = await Promise.all([
-          api.getProjects(),
+        const [fetchedProjects, modelsRes] = await Promise.all([
+          fetchProjects(),
           api.getModels()
         ])
         
-        const projectsData = projectsRes.data.data as { projects: Project[] }
-        setProjects(projectsData?.projects || [])
-        if (projectsData?.projects?.length > 0) {
-          const firstProject = projectsData.projects[0].name
+        if (fetchedProjects.length > 0) {
+          const firstProject = fetchedProjects[0].name
           setSelectedProject(firstProject)
           setActiveProject(firstProject)
         }
@@ -90,19 +102,34 @@ export default function ChatInterface() {
   const sendMessage = async () => {
     if (!input.trim() || isLoading || !selectedProject || !activeConversationId) return
 
+    // Include context indicator in the user message if context was provided
+    const messageContent = userContext.trim() 
+      ? `${input}\n\n---\n📎 *With attached context (${userContext.length} chars)*`
+      : input
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: input,
+      content: messageContent,
       timestamp: new Date().toISOString(),
     }
 
     addMessage(selectedProject, activeConversationId, userMessage)
+    const currentContext = userContext.trim() || undefined
     setInput('')
+    setUserContext('')
+    setShowContextInput(false)
     setIsLoading(true)
 
     try {
-      const response = await api.queryCodebase(input, selectedProject, selectedModel)
+      const response = await api.queryCodebase(
+        input, 
+        selectedProject, 
+        selectedModel, 
+        5, // context_limit
+        'openai', // embedding_provider
+        currentContext
+      )
       const data = response.data.data as { answer: string; sources?: { file: string; snippet: string }[]; model_used?: string }
 
       const assistantMessage: Message = {
@@ -143,6 +170,7 @@ export default function ChatInterface() {
           projects={projects}
           selectedProject={selectedProject}
           onProjectSelect={handleProjectChange}
+          onProjectsChange={fetchProjects}
         />
       </div>
 
@@ -474,7 +502,54 @@ export default function ChatInterface() {
 
         {/* Input Area */}
         <div className="p-4 border-t border-carbon-700">
+          {/* Context Input (Collapsible) */}
+          {showContextInput && (
+            <div className="mb-3 relative">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-carbon-400 flex items-center gap-2">
+                  <Paperclip className="w-4 h-4" />
+                  Paste code or content for context
+                </span>
+                <button
+                  onClick={() => {
+                    setShowContextInput(false)
+                    setUserContext('')
+                  }}
+                  className="text-carbon-500 hover:text-white transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <textarea
+                value={userContext}
+                onChange={(e) => setUserContext(e.target.value)}
+                placeholder="Paste code, documentation, or any content you want the AI to analyze..."
+                rows={4}
+                className="w-full bg-carbon-900 border border-carbon-700 rounded-xl px-4 py-3 text-white placeholder-carbon-500 focus:outline-none focus:border-accent-violet resize-y font-mono text-sm"
+              />
+              {userContext && (
+                <div className="absolute bottom-2 right-2 text-xs text-carbon-500">
+                  {userContext.length.toLocaleString()} chars
+                </div>
+              )}
+            </div>
+          )}
+          
           <div className="flex gap-3">
+            {/* Context Toggle Button */}
+            <button
+              onClick={() => setShowContextInput(!showContextInput)}
+              disabled={!selectedProject || !activeConversationId}
+              className={`px-3 py-3 rounded-xl border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                showContextInput || userContext
+                  ? 'border-accent-violet bg-accent-violet/10 text-accent-violet'
+                  : 'border-carbon-700 text-carbon-400 hover:border-carbon-500 hover:text-white'
+              }`}
+              title="Add context (paste code or content)"
+            >
+              <Paperclip className="w-5 h-5" />
+            </button>
+            
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -492,6 +567,13 @@ export default function ChatInterface() {
               <Send className="w-5 h-5" />
             </button>
           </div>
+          
+          {userContext && !showContextInput && (
+            <div className="mt-2 text-xs text-accent-violet flex items-center gap-1">
+              <Paperclip className="w-3 h-3" />
+              Context attached ({userContext.length.toLocaleString()} chars)
+            </div>
+          )}
         </div>
       </div>
     </div>

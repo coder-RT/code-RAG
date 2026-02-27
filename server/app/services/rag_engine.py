@@ -3,17 +3,58 @@ RAG Engine - Core RAG functionality for code understanding
 """
 
 import asyncio
-from typing import List, Dict, Optional
+import re
+from typing import List, Dict, Optional, Tuple
 
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import Chroma
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain.schema import Document
+import chromadb
 
 from app.core.config import settings, EmbeddingProvider
 from app.services.loader import FileLoader, LoadedFile
 from app.services.chunker import Chunker, Chunk
+
+
+# Common file extensions to detect in queries
+FILE_EXTENSIONS = r'\.(?:md|py|ts|tsx|js|jsx|go|rs|java|tf|yaml|yml|json|sql|sh|css|scss|html)'
+
+def extract_file_path_from_query(query: str) -> Optional[str]:
+    """
+    Extract a file path from a query if the user is asking about a specific file.
+    Returns the file path pattern to search for, or None if no file path detected.
+    """
+    query_lower = query.lower()
+    
+    # Pattern to match file paths with common extensions
+    # Matches: path/to/file.ext (with various path formats)
+    file_path_pattern = r'([a-zA-Z0-9_\-./]+' + FILE_EXTENSIONS + r')'
+    
+    # First, check for backtick quoted paths: `path/to/file.md`
+    backtick_match = re.search(r'`([^`]+' + FILE_EXTENSIONS + r')`', query_lower)
+    if backtick_match:
+        return backtick_match.group(1)
+    
+    # Common action words that precede file paths
+    action_patterns = [
+        r'(?:read|explain|show|open|view|look\s+at|analyze|understand|summarize)\s+(?:the\s+)?(?:file\s+)?(?:contents?\s+of\s+)?' + file_path_pattern,
+        r'(?:what\s+(?:does|is\s+in)|contents?\s+of|about)\s+' + file_path_pattern,
+    ]
+    
+    for pattern in action_patterns:
+        match = re.search(pattern, query_lower, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    
+    # Try to find any file path in the query
+    all_paths = re.findall(file_path_pattern, query_lower)
+    if all_paths:
+        # Return the most specific path (longest one)
+        return max(all_paths, key=len)
+    
+    return None
 
 
 def get_embeddings(provider: Optional[str] = None):
@@ -183,76 +224,227 @@ class RAGEngine:
             }
         }
     
+    def _get_chunks_by_file_path(self, file_path: str, limit: int = 10) -> List[Document]:
+        """
+        Retrieve chunks that match a specific file path pattern.
+        Uses direct ChromaDB access for metadata filtering.
+        """
+        client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIRECTORY)
+        try:
+            collection = client.get_collection(name=self.collection_name)
+        except Exception:
+            return []
+        
+        # Get all chunks (we'll filter in Python since ChromaDB doesn't support $contains)
+        total = collection.count()
+        matching_docs = []
+        
+        # Normalize file path for matching
+        file_path_lower = file_path.lower()
+        
+        # Sample in batches to find matching files
+        batch_size = 1000
+        for offset in range(0, min(total, 20000), batch_size):
+            results = collection.get(
+                limit=batch_size,
+                offset=offset,
+                include=['metadatas', 'documents']
+            )
+            
+            for i, meta in enumerate(results['metadatas']):
+                source = meta.get('source', '').lower()
+                # Check if the file path pattern matches
+                if file_path_lower in source or source.endswith(file_path_lower):
+                    doc = Document(
+                        page_content=results['documents'][i],
+                        metadata=meta
+                    )
+                    matching_docs.append(doc)
+                    
+                    if len(matching_docs) >= limit:
+                        return matching_docs
+        
+        return matching_docs
+
     async def query(
         self,
         question: str,
-        context_limit: int = 5
+        context_limit: int = 5,
+        user_context: Optional[str] = None
     ) -> Dict:
         """
         Query the indexed codebase using RAG.
-        """
-        if self.vectorstore is None:
-            # Try to load existing vectorstore
-            self.vectorstore = Chroma(
-                persist_directory=settings.CHROMA_PERSIST_DIRECTORY,
-                embedding_function=self.embeddings,
-                collection_name=self.collection_name
-            )
+        Supports file-path-aware retrieval for specific file queries.
+        Also supports user-provided context for direct LLM chat.
         
+        Args:
+            question: The question to answer
+            context_limit: Max number of chunks to retrieve from codebase
+            user_context: Optional user-provided content to include in context
+        """
         # Custom prompt for code understanding
-        prompt_template = """You are an expert software engineer analyzing a codebase.
-Use the following code context to answer the question. Be specific and reference
-the actual code when possible.
+        prompt_template = """You are an expert software engineer assistant.
+{context_intro}
 
-Context:
 {context}
 
 Question: {question}
 
 Provide a clear, detailed answer that:
 1. Directly addresses the question
-2. References specific files and code when relevant
+2. References specific code when relevant
 3. Explains the reasoning and connections
 4. Suggests where to look for more details if applicable
 
 Answer:"""
 
+        # If user provides context and no codebase retrieval needed
+        if user_context and context_limit == 0:
+            print("💬 Using user-provided context only (no RAG)")
+            context_intro = "The user has provided the following content for you to analyze:"
+            
+            PROMPT = PromptTemplate(
+                template=prompt_template,
+                input_variables=["context_intro", "context", "question"]
+            )
+            
+            formatted_prompt = PROMPT.format(
+                context_intro=context_intro,
+                context=user_context,
+                question=question
+            )
+            response = self.llm.invoke(formatted_prompt)
+            
+            return {
+                "answer": response.content if hasattr(response, 'content') else str(response),
+                "sources": [{"file": "user-provided", "chunk_type": "user_context", "lines": "N/A", "snippet": user_context[:300] + "..." if len(user_context) > 300 else user_context}]
+            }
+        
+        # Initialize vectorstore if needed for RAG
+        if self.vectorstore is None:
+            self.vectorstore = Chroma(
+                persist_directory=settings.CHROMA_PERSIST_DIRECTORY,
+                embedding_function=self.embeddings,
+                collection_name=self.collection_name
+            )
+        
+        # Check if the query is asking about a specific file
+        file_path = extract_file_path_from_query(question)
+        file_specific_docs = []
+        
+        if file_path:
+            # Get chunks from the specific file
+            file_specific_docs = self._get_chunks_by_file_path(file_path, limit=context_limit)
+            if file_specific_docs:
+                print(f"📂 Found {len(file_specific_docs)} chunks from file matching: {file_path}")
+        
+        # Build context intro based on what we have
+        if user_context:
+            context_intro = "You have access to BOTH user-provided content AND an indexed codebase. Use both to answer."
+        else:
+            context_intro = "You have FULL ACCESS to an indexed codebase. The relevant content is provided below. DO NOT say you cannot access files."
+
         PROMPT = PromptTemplate(
             template=prompt_template,
-            input_variables=["context", "question"]
+            input_variables=["context_intro", "context", "question"]
         )
         
-        # Create retrieval chain
-        qa_chain = RetrievalQA.from_chain_type(
-            llm=self.llm,
-            chain_type="stuff",
-            retriever=self.vectorstore.as_retriever(
-                search_kwargs={"k": context_limit}
-            ),
-            return_source_documents=True,
-            chain_type_kwargs={"prompt": PROMPT}
+        # If we found file-specific docs, use them directly with the LLM
+        if file_specific_docs:
+            # Build context from file-specific documents
+            context_parts = []
+            
+            # Add user context first if provided
+            if user_context:
+                context_parts.append(f"### User-Provided Content:\n{user_context}")
+            
+            context_parts.append("### From Indexed Codebase:")
+            for doc in file_specific_docs:
+                source = doc.metadata.get('source', 'unknown')
+                lines = f"{doc.metadata.get('start_line', '?')}-{doc.metadata.get('end_line', '?')}"
+                context_parts.append(f"#### File: {source} (lines {lines})\n{doc.page_content}")
+            
+            context_text = "\n\n".join(context_parts)
+            
+            # Call LLM directly with the file-specific context
+            formatted_prompt = PROMPT.format(
+                context_intro=context_intro,
+                context=context_text, 
+                question=question
+            )
+            response = self.llm.invoke(formatted_prompt)
+            
+            # Build sources list
+            sources = []
+            if user_context:
+                sources.append({
+                    "file": "user-provided",
+                    "chunk_type": "user_context",
+                    "lines": "N/A",
+                    "snippet": user_context[:300] + "..." if len(user_context) > 300 else user_context
+                })
+            for doc in file_specific_docs:
+                sources.append({
+                    "file": doc.metadata.get("source", "unknown"),
+                    "chunk_type": doc.metadata.get("chunk_type", "unknown"),
+                    "lines": f"{doc.metadata.get('start_line', '?')}-{doc.metadata.get('end_line', '?')}",
+                    "snippet": doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content
+                })
+            
+            return {
+                "answer": response.content if hasattr(response, 'content') else str(response),
+                "sources": sources
+            }
+        
+        # Fall back to standard semantic search
+        retrieved_docs = self.vectorstore.similarity_search(question, k=context_limit)
+        
+        # Build context from retrieved documents
+        context_parts = []
+        
+        # Add user context first if provided
+        if user_context:
+            print("💬 Combining user context with RAG retrieval")
+            context_parts.append(f"### User-Provided Content:\n{user_context}")
+        
+        context_parts.append("### From Indexed Codebase:")
+        for doc in retrieved_docs:
+            source = doc.metadata.get('source', 'unknown')
+            lines = f"{doc.metadata.get('start_line', '?')}-{doc.metadata.get('end_line', '?')}"
+            context_parts.append(f"#### File: {source} (lines {lines})\n{doc.page_content}")
+        
+        context_text = "\n\n".join(context_parts)
+        
+        # Call LLM with combined context
+        formatted_prompt = PROMPT.format(
+            context_intro=context_intro,
+            context=context_text,
+            question=question
         )
+        response = self.llm.invoke(formatted_prompt)
         
-        result = qa_chain.invoke({"query": question})
-        
-        # Extract sources with rich metadata
+        # Build sources list
         sources = []
-        for doc in result.get("source_documents", []):
+        if user_context:
+            sources.append({
+                "file": "user-provided",
+                "chunk_type": "user_context",
+                "lines": "N/A",
+                "snippet": user_context[:300] + "..." if len(user_context) > 300 else user_context
+            })
+        for doc in retrieved_docs:
             source_info = {
                 "file": doc.metadata.get("source", "unknown"),
                 "chunk_type": doc.metadata.get("chunk_type", "unknown"),
                 "lines": f"{doc.metadata.get('start_line', '?')}-{doc.metadata.get('end_line', '?')}",
                 "snippet": doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content
             }
-            
-            # Add terraform-specific info if available
             if "terraform_id" in doc.metadata:
                 source_info["terraform_id"] = doc.metadata["terraform_id"]
-            
             sources.append(source_info)
         
         return {
-            "answer": result["result"],
+            "answer": response.content if hasattr(response, 'content') else str(response),
             "sources": sources
         }
     

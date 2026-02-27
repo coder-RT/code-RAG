@@ -34,6 +34,8 @@ interface ChatState {
   createConversation: (projectName: string, title?: string) => string
   deleteConversation: (projectName: string, conversationId: string) => void
   renameConversation: (projectName: string, conversationId: string, title: string) => void
+  renameProjectInStore: (oldName: string, newName: string) => void
+  deleteProjectFromStore: (projectName: string) => void
   addMessage: (projectName: string, conversationId: string, message: Message) => void
   getActiveConversation: () => Conversation | null
   getProjectConversations: (projectName: string) => Conversation[]
@@ -163,6 +165,42 @@ export const useChatStore = create<ChatState>()(
               ),
             },
           },
+        })
+      },
+
+      renameProjectInStore: (oldName: string, newName: string) => {
+        const { projects, activeProjectName } = get()
+        const projectChats = projects[oldName]
+        if (!projectChats) return
+
+        const { [oldName]: _, ...rest } = projects
+        set({
+          activeProjectName: activeProjectName === oldName ? newName : activeProjectName,
+          projects: {
+            ...rest,
+            [newName]: {
+              ...projectChats,
+              projectName: newName,
+            },
+          },
+        })
+      },
+
+      deleteProjectFromStore: (projectName: string) => {
+        const { projects, activeProjectName } = get()
+        const { [projectName]: _, ...rest } = projects
+        
+        const remainingProjects = Object.keys(rest)
+        const newActiveProject = activeProjectName === projectName
+          ? (remainingProjects[0] || null)
+          : activeProjectName
+
+        set({
+          projects: rest,
+          activeProjectName: newActiveProject,
+          activeConversationId: newActiveProject 
+            ? (rest[newActiveProject]?.conversations[0]?.id || null) 
+            : null,
         })
       },
 

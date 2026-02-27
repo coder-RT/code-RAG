@@ -12,21 +12,28 @@ import {
   X
 } from 'lucide-react'
 import { useChatStore, Conversation } from '@/stores/chatStore'
-import { Project } from '@/lib/api'
+import { Project, api } from '@/lib/api'
 
 interface ChatSidebarProps {
   projects: Project[]
   selectedProject: string
   onProjectSelect: (projectName: string) => void
+  onProjectsChange: () => void
 }
 
 export default function ChatSidebar({ 
   projects, 
   selectedProject, 
-  onProjectSelect 
+  onProjectSelect,
+  onProjectsChange,
 }: ChatSidebarProps) {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set([selectedProject]))
   const [hoveredConv, setHoveredConv] = useState<string | null>(null)
+  const [hoveredProject, setHoveredProject] = useState<string | null>(null)
+  const [editingProject, setEditingProject] = useState<string | null>(null)
+  const [editProjectName, setEditProjectName] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const projectInputRef = useRef<HTMLInputElement>(null)
 
   const { 
     projects: chatProjects,
@@ -36,8 +43,17 @@ export default function ChatSidebar({
     createConversation,
     deleteConversation,
     renameConversation,
+    renameProjectInStore,
+    deleteProjectFromStore,
     getProjectConversations,
   } = useChatStore()
+
+  useEffect(() => {
+    if (editingProject && projectInputRef.current) {
+      projectInputRef.current.focus()
+      projectInputRef.current.select()
+    }
+  }, [editingProject])
 
   const toggleProject = (projectName: string) => {
     const newExpanded = new Set(expandedProjects)
@@ -85,6 +101,78 @@ export default function ChatSidebar({
     setActiveConversation(convId)
   }
 
+  const handleStartProjectEdit = (projectName: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setEditProjectName(projectName)
+    setEditingProject(projectName)
+  }
+
+  const handleSaveProjectEdit = async (oldName: string) => {
+    if (!editProjectName.trim() || editProjectName === oldName) {
+      setEditingProject(null)
+      return
+    }
+
+    setIsLoading(true)
+    try {
+      const response = await api.renameProject(oldName, editProjectName)
+      if (response.data.success) {
+        const newName = (response.data.data as { new_name: string }).new_name
+        renameProjectInStore(oldName, newName)
+        if (selectedProject === oldName) {
+          onProjectSelect(newName)
+        }
+        onProjectsChange()
+      }
+    } catch (error) {
+      console.error('Failed to rename project:', error)
+      alert('Failed to rename project')
+    } finally {
+      setIsLoading(false)
+      setEditingProject(null)
+    }
+  }
+
+  const handleCancelProjectEdit = () => {
+    setEditingProject(null)
+    setEditProjectName('')
+  }
+
+  const handleDeleteProject = async (projectName: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!confirm(`Delete project "${projectName}" and all its indexed data? This cannot be undone.`)) {
+      return
+    }
+
+    setIsLoading(true)
+    try {
+      const response = await api.deleteProject(projectName)
+      if (response.data.success) {
+        deleteProjectFromStore(projectName)
+        onProjectsChange()
+        if (selectedProject === projectName && projects.length > 1) {
+          const remaining = projects.filter(p => p.name !== projectName)
+          if (remaining.length > 0) {
+            onProjectSelect(remaining[0].name)
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to delete project:', error)
+      alert('Failed to delete project')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleProjectKeyDown = (e: React.KeyboardEvent, oldName: string) => {
+    if (e.key === 'Enter') {
+      handleSaveProjectEdit(oldName)
+    } else if (e.key === 'Escape') {
+      handleCancelProjectEdit()
+    }
+  }
+
   return (
     <div className="h-full flex flex-col bg-carbon-950 border-r border-carbon-800">
       {/* Header */}
@@ -112,49 +200,104 @@ export default function ChatSidebar({
               return (
                 <div key={project.name}>
                   {/* Project Header */}
-                  <div
-                    onClick={() => handleProjectClick(project.name)}
-                    className={`
-                      flex items-center gap-2 px-3 py-2 mx-2 rounded-lg cursor-pointer
-                      transition-colors group
-                      ${isActive 
-                        ? 'bg-accent-cyan/10 text-accent-cyan' 
-                        : 'text-carbon-300 hover:bg-carbon-800/50 hover:text-white'
-                      }
-                    `}
-                  >
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        toggleProject(project.name)
-                      }}
-                      className="p-0.5 hover:bg-carbon-700 rounded transition-colors"
+                  {editingProject === project.name ? (
+                    <div
+                      className="flex items-center gap-2 px-3 py-2 mx-2 rounded-lg bg-carbon-800 border border-carbon-600"
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      {isExpanded ? (
-                        <ChevronDown className="w-4 h-4" />
+                      <FolderOpen className="w-4 h-4 flex-shrink-0 text-accent-cyan" />
+                      <input
+                        ref={projectInputRef}
+                        type="text"
+                        value={editProjectName}
+                        onChange={(e) => setEditProjectName(e.target.value)}
+                        onKeyDown={(e) => handleProjectKeyDown(e, project.name)}
+                        onBlur={() => handleSaveProjectEdit(project.name)}
+                        disabled={isLoading}
+                        className="flex-1 bg-transparent text-sm text-white outline-none min-w-0 font-medium"
+                      />
+                      <button
+                        onClick={() => handleSaveProjectEdit(project.name)}
+                        disabled={isLoading}
+                        className="p-1 hover:bg-carbon-700 text-accent-emerald rounded transition-colors"
+                        title="Save"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={handleCancelProjectEdit}
+                        disabled={isLoading}
+                        className="p-1 hover:bg-carbon-700 text-carbon-400 rounded transition-colors"
+                        title="Cancel"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div
+                      onClick={() => handleProjectClick(project.name)}
+                      onMouseEnter={() => setHoveredProject(project.name)}
+                      onMouseLeave={() => setHoveredProject(null)}
+                      className={`
+                        flex items-center gap-2 px-3 py-2 mx-2 rounded-lg cursor-pointer
+                        transition-colors group
+                        ${isActive 
+                          ? 'bg-accent-cyan/10 text-accent-cyan' 
+                          : 'text-carbon-300 hover:bg-carbon-800/50 hover:text-white'
+                        }
+                      `}
+                    >
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          toggleProject(project.name)
+                        }}
+                        className="p-0.5 hover:bg-carbon-700 rounded transition-colors"
+                      >
+                        {isExpanded ? (
+                          <ChevronDown className="w-4 h-4" />
+                        ) : (
+                          <ChevronRight className="w-4 h-4" />
+                        )}
+                      </button>
+                      
+                      <FolderOpen className="w-4 h-4 flex-shrink-0" />
+                      
+                      <span className="flex-1 truncate text-sm font-medium">
+                        {project.name}
+                      </span>
+
+                      {hoveredProject === project.name || isActive ? (
+                        <div className="flex items-center gap-0.5">
+                          <button
+                            onClick={(e) => handleNewConversation(project.name, e)}
+                            className="p-1 hover:bg-carbon-700 hover:text-accent-emerald rounded transition-colors"
+                            title="New conversation"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => handleStartProjectEdit(project.name, e)}
+                            className="p-1 hover:bg-carbon-700 hover:text-accent-cyan rounded transition-colors"
+                            title="Rename project"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => handleDeleteProject(project.name, e)}
+                            className="p-1 hover:bg-carbon-700 hover:text-accent-rose rounded transition-colors"
+                            title="Delete project"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       ) : (
-                        <ChevronRight className="w-4 h-4" />
+                        <span className="text-xs text-carbon-500">
+                          {conversations.length}
+                        </span>
                       )}
-                    </button>
-                    
-                    <FolderOpen className="w-4 h-4 flex-shrink-0" />
-                    
-                    <span className="flex-1 truncate text-sm font-medium">
-                      {project.name}
-                    </span>
-
-                    <span className="text-xs text-carbon-500 group-hover:hidden">
-                      {conversations.length}
-                    </span>
-
-                    <button
-                      onClick={(e) => handleNewConversation(project.name, e)}
-                      className="hidden group-hover:flex p-1 hover:bg-carbon-700 rounded transition-colors"
-                      title="New conversation"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
+                    </div>
+                  )}
 
                   {/* Conversations List */}
                   <AnimatePresence>

@@ -84,6 +84,12 @@ export const api = {
   // Delete a project
   deleteProject: (projectName: string) =>
     client.delete<CodebaseResponse>(`/codebase/projects/${projectName}`),
+  
+  // Rename a project
+  renameProject: (projectName: string, newName: string) =>
+    client.put<CodebaseResponse>(`/codebase/projects/${projectName}/rename`, {
+      new_name: newName,
+    }),
 
   // Get available LLM models
   getModels: () =>
@@ -98,7 +104,8 @@ export const api = {
     projectName: string, 
     llmModel = 'gpt-4o',
     contextLimit = 5, 
-    embeddingProvider = 'openai'
+    embeddingProvider = 'openai',
+    userContext?: string
   ) =>
     client.post<CodebaseResponse>('/codebase/query', {
       question,
@@ -106,6 +113,7 @@ export const api = {
       llm_model: llmModel,
       context_limit: contextLimit,
       embedding_provider: embeddingProvider,
+      user_context: userContext || null,
     }),
 
   explainCode: (path: string, detailLevel = 'summary') =>

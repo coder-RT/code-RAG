@@ -30,6 +30,7 @@ class QueryRequest(BaseModel):
     context_limit: int = 5
     embedding_provider: Optional[str] = "openai"  # Must match what was used during indexing
     llm_model: Optional[str] = "gpt-4o"  # LLM model to use for answering
+    user_context: Optional[str] = None  # User-provided content to include in context
 
 
 # Available LLM models for query answering
@@ -204,14 +205,20 @@ async def query_codebase(request: QueryRequest):
     Uses RAG to find relevant code and generate answers.
     """
     try:
+        from app.core.project_manager import project_manager
+        
+        # Resolve display name to actual collection name
+        collection_name = project_manager.get_collection_name(request.project_name)
+        
         rag_engine = RAGEngine(
             embedding_provider=request.embedding_provider,
-            project_name=request.project_name,
+            project_name=collection_name,
             llm_model=request.llm_model
         )
         result = await rag_engine.query(
             question=request.question,
-            context_limit=request.context_limit
+            context_limit=request.context_limit,
+            user_context=request.user_context
         )
         
         return CodebaseResponse(
@@ -273,19 +280,22 @@ async def get_structure(path: str):
 @router.get("/projects", response_model=CodebaseResponse)
 async def list_projects():
     """
-    List all indexed projects (ChromaDB collections).
+    List all indexed projects (ChromaDB collections) with display names.
     """
     try:
         import chromadb
         from app.core.config import settings
+        from app.core.project_manager import project_manager
         
         client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIRECTORY)
         collections = client.list_collections()
         
         projects = []
         for collection in collections:
+            display_name = project_manager.get_display_name(collection.name)
             projects.append({
-                "name": collection.name,
+                "name": display_name,
+                "collection_name": collection.name,
                 "count": collection.count()
             })
         
@@ -302,19 +312,87 @@ async def list_projects():
 async def delete_project(project_name: str):
     """
     Delete an indexed project (ChromaDB collection).
+    Accepts either display name or collection name.
     """
     try:
         import chromadb
         from app.core.config import settings
+        from app.core.project_manager import project_manager
+        
+        # Resolve display name to collection name
+        collection_name = project_manager.get_collection_name(project_name)
         
         client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIRECTORY)
-        client.delete_collection(name=project_name)
+        client.delete_collection(name=collection_name)
+        
+        # Also remove alias if exists
+        project_manager.remove_alias(collection_name)
         
         return CodebaseResponse(
             success=True,
             message=f"Project '{project_name}' deleted successfully",
             data={"deleted": project_name}
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class RenameProjectRequest(BaseModel):
+    """Request to rename a project"""
+    new_name: str
+
+
+@router.put("/projects/{project_name}/rename", response_model=CodebaseResponse)
+async def rename_project(project_name: str, request: RenameProjectRequest):
+    """
+    Rename an indexed project by updating its display name alias.
+    Does NOT copy data - just updates the alias mapping.
+    """
+    try:
+        import chromadb
+        from app.core.config import settings
+        from app.core.project_manager import project_manager
+        
+        new_name = request.new_name.strip()
+        
+        if not new_name:
+            raise HTTPException(status_code=400, detail="New name cannot be empty")
+        
+        if new_name == project_name:
+            raise HTTPException(status_code=400, detail="New name is the same as current name")
+        
+        # Check if new_name is already used by another project
+        all_mappings = project_manager.get_all_mappings()
+        for coll, alias in all_mappings.items():
+            if alias == new_name:
+                raise HTTPException(status_code=400, detail=f"Name '{new_name}' is already in use")
+        
+        # Resolve the collection name from current display name
+        collection_name = project_manager.get_collection_name(project_name)
+        
+        # Verify the collection exists in ChromaDB
+        client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIRECTORY)
+        try:
+            collection = client.get_collection(name=collection_name)
+            chunk_count = collection.count()
+        except Exception:
+            raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found")
+        
+        # Update alias (instant operation, no data copy)
+        project_manager.set_alias(collection_name, new_name)
+        
+        return CodebaseResponse(
+            success=True,
+            message=f"Project renamed from '{project_name}' to '{new_name}'",
+            data={
+                "old_name": project_name, 
+                "new_name": new_name, 
+                "collection_name": collection_name,
+                "chunks": chunk_count
+            }
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
