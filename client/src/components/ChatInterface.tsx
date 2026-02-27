@@ -1,22 +1,14 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Bot, User, Loader2, Sparkles, ChevronDown, Database, FileCode, ChevronRight, Cpu } from 'lucide-react'
+import { Send, Bot, User, Loader2, Sparkles, ChevronDown, Database, FileCode, ChevronRight, Cpu, Trash2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { api, Project, LLMModel } from '@/lib/api'
-
-interface Message {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  sources?: { file: string; snippet: string }[]
-  timestamp: Date
-}
+import { useChatStore, Message } from '@/stores/chatStore'
 
 export default function ChatInterface() {
-  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [projects, setProjects] = useState<Project[]>([])
@@ -26,9 +18,17 @@ export default function ChatInterface() {
   const [selectedModel, setSelectedModel] = useState<string>('gpt-4o')
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
+  // Zustand store for persistent conversations
+  const { addMessage, setActiveProject, clearConversation, conversations } = useChatStore()
+  
+  // Get messages for current project (reactive to store changes)
+  const messages = useMemo(() => {
+    if (!selectedProject) return []
+    return conversations[selectedProject]?.messages || []
+  }, [selectedProject, conversations])
+
   useEffect(() => {
     const fetchData = async () => {
-      // Fetch projects and models in parallel
       try {
         const [projectsRes, modelsRes] = await Promise.all([
           api.getProjects(),
@@ -38,7 +38,9 @@ export default function ChatInterface() {
         const projectsData = projectsRes.data.data as { projects: Project[] }
         setProjects(projectsData?.projects || [])
         if (projectsData?.projects?.length > 0) {
-          setSelectedProject(projectsData.projects[0].name)
+          const firstProject = projectsData.projects[0].name
+          setSelectedProject(firstProject)
+          setActiveProject(firstProject)
         }
         
         const modelsData = modelsRes.data.data as { models: LLMModel[] }
@@ -53,7 +55,7 @@ export default function ChatInterface() {
       }
     }
     fetchData()
-  }, [])
+  }, [setActiveProject])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -63,6 +65,18 @@ export default function ChatInterface() {
     scrollToBottom()
   }, [messages])
 
+  // Update active project when selection changes
+  const handleProjectChange = (projectName: string) => {
+    setSelectedProject(projectName)
+    setActiveProject(projectName)
+  }
+
+  const handleClearConversation = () => {
+    if (selectedProject && confirm('Clear conversation history for this project?')) {
+      clearConversation(selectedProject)
+    }
+  }
+
   const sendMessage = async () => {
     if (!input.trim() || isLoading || !selectedProject) return
 
@@ -70,10 +84,10 @@ export default function ChatInterface() {
       id: Date.now().toString(),
       role: 'user',
       content: input,
-      timestamp: new Date(),
+      timestamp: new Date().toISOString(),
     }
 
-    setMessages((prev) => [...prev, userMessage])
+    addMessage(selectedProject, userMessage)
     setInput('')
     setIsLoading(true)
 
@@ -86,18 +100,19 @@ export default function ChatInterface() {
         role: 'assistant',
         content: data?.answer || 'No answer received',
         sources: data?.sources,
-        timestamp: new Date(),
+        timestamp: new Date().toISOString(),
+        modelUsed: data?.model_used || selectedModel,
       }
 
-      setMessages((prev) => [...prev, assistantMessage])
+      addMessage(selectedProject, assistantMessage)
     } catch (error) {
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: 'Sorry, I encountered an error processing your request. Please try again.',
-        timestamp: new Date(),
+        timestamp: new Date().toISOString(),
       }
-      setMessages((prev) => [...prev, errorMessage])
+      addMessage(selectedProject, errorMessage)
     } finally {
       setIsLoading(false)
     }
@@ -386,7 +401,7 @@ export default function ChatInterface() {
               <div className="relative">
                 <select
                   value={selectedProject}
-                  onChange={(e) => setSelectedProject(e.target.value)}
+                  onChange={(e) => handleProjectChange(e.target.value)}
                   className="appearance-none bg-carbon-900 border border-carbon-700 rounded-lg px-3 py-1.5 pr-8 text-sm text-white focus:outline-none focus:border-accent-cyan cursor-pointer"
                 >
                   {projects.map((project) => (
@@ -399,6 +414,18 @@ export default function ChatInterface() {
               </div>
             )}
           </div>
+
+          {/* Clear Conversation */}
+          {messages.length > 0 && (
+            <button
+              onClick={handleClearConversation}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-sm text-carbon-400 hover:text-accent-rose hover:bg-carbon-800 rounded-lg transition-colors"
+              title="Clear conversation"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Clear</span>
+            </button>
+          )}
 
           {/* Model Selector */}
           <div className="flex items-center gap-2">
