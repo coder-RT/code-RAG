@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Bot, User, Loader2, Sparkles, ChevronDown, FileCode, ChevronRight, Cpu, Plus } from 'lucide-react'
+import { Send, Bot, User, Loader2, Sparkles, ChevronDown, FileCode, ChevronRight, Cpu, Plus, Database } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
@@ -148,17 +148,39 @@ export default function ChatInterface() {
 
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col">
-        {/* Header with Model Selector */}
+        {/* Header with Project & Model Selectors */}
         <div className="px-4 py-3 border-b border-carbon-700 flex items-center justify-between bg-carbon-900/50">
-          <div className="flex items-center gap-3">
-            <h3 className="font-medium text-white">
-              {activeConversation?.title || 'Select a conversation'}
-            </h3>
-            {selectedProject && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20">
-                {selectedProject}
+          <div className="flex items-center gap-4">
+            {/* Project Selector */}
+            <div className="flex items-center gap-2">
+              <Database className="w-4 h-4 text-accent-cyan" />
+              <div className="relative">
+                <select
+                  value={selectedProject}
+                  onChange={(e) => handleProjectChange(e.target.value)}
+                  className="appearance-none bg-carbon-800 border border-carbon-700 rounded-lg px-3 py-1.5 pr-8 text-sm text-white focus:outline-none focus:border-accent-cyan cursor-pointer font-medium"
+                >
+                  {projects.length === 0 ? (
+                    <option value="">No indexed projects</option>
+                  ) : (
+                    projects.map((project) => (
+                      <option key={project.name} value={project.name}>
+                        {project.name}
+                      </option>
+                    ))
+                  )}
+                </select>
+                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-carbon-400 pointer-events-none" />
+              </div>
+            </div>
+
+            {/* Conversation Title */}
+            <div className="flex items-center gap-2 text-carbon-400">
+              <span className="text-carbon-600">/</span>
+              <span className="text-sm truncate max-w-[200px]">
+                {activeConversation?.title || 'New Chat'}
               </span>
-            )}
+            </div>
           </div>
           
           <div className="flex items-center gap-3">
