@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Bot, User, Loader2, Sparkles, ChevronDown, Database } from 'lucide-react'
+import { Send, Bot, User, Loader2, Sparkles, ChevronDown, Database, FileCode, ChevronRight } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { api, Project } from '@/lib/api'
 
 interface Message {
@@ -131,50 +132,193 @@ export default function ChatInterface() {
                 </div>
               )}
               
-              <div className={`max-w-[80%] ${message.role === 'user' ? 'order-first' : ''}`}>
+              <div className={`max-w-[85%] ${message.role === 'user' ? 'order-first' : ''}`}>
                 <div
-                  className={`rounded-2xl p-4 ${
+                  className={`rounded-2xl ${
                     message.role === 'user'
-                      ? 'bg-gradient-to-r from-accent-cyan to-accent-violet text-white'
-                      : 'bg-carbon-900 border border-carbon-700'
+                      ? 'bg-gradient-to-r from-accent-cyan to-accent-violet text-white px-5 py-3'
+                      : 'bg-carbon-900/80 border border-carbon-700/50 px-6 py-5'
                   }`}
                 >
-                  <ReactMarkdown
-                    components={{
-                      code({ className, children, ...props }) {
-                        const match = /language-(\w+)/.exec(className || '')
-                        const isInline = !match
-                        
-                        return isInline ? (
-                          <code className="bg-carbon-800 px-1.5 py-0.5 rounded text-accent-cyan font-mono text-sm" {...props}>
-                            {children}
-                          </code>
-                        ) : (
-                          <SyntaxHighlighter
-                            style={vscDarkPlus}
-                            language={match[1]}
-                            PreTag="div"
-                            className="rounded-lg !bg-carbon-950 !mt-2"
-                          >
-                            {String(children).replace(/\n$/, '')}
-                          </SyntaxHighlighter>
-                        )
-                      },
-                    }}
-                  >
-                    {message.content}
-                  </ReactMarkdown>
+                  {message.role === 'assistant' ? (
+                    <div className="prose prose-invert prose-sm max-w-none">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          // Headings with visual hierarchy
+                          h1: ({ children }) => (
+                            <h1 className="text-xl font-bold text-white mt-6 mb-3 pb-2 border-b border-carbon-700 first:mt-0">
+                              {children}
+                            </h1>
+                          ),
+                          h2: ({ children }) => (
+                            <h2 className="text-lg font-semibold text-white mt-5 mb-2 flex items-center gap-2 first:mt-0">
+                              <span className="w-1 h-5 bg-accent-cyan rounded-full"></span>
+                              {children}
+                            </h2>
+                          ),
+                          h3: ({ children }) => (
+                            <h3 className="text-base font-semibold text-carbon-200 mt-4 mb-2 first:mt-0">
+                              {children}
+                            </h3>
+                          ),
+                          h4: ({ children }) => (
+                            <h4 className="text-sm font-semibold text-carbon-300 mt-3 mb-1.5 first:mt-0">
+                              {children}
+                            </h4>
+                          ),
+                          
+                          // Paragraphs with good spacing
+                          p: ({ children }) => (
+                            <p className="text-carbon-200 leading-relaxed mb-4 last:mb-0">
+                              {children}
+                            </p>
+                          ),
+                          
+                          // Lists with proper styling
+                          ul: ({ children }) => (
+                            <ul className="space-y-2 mb-4 last:mb-0 ml-1">
+                              {children}
+                            </ul>
+                          ),
+                          ol: ({ children }) => (
+                            <ol className="space-y-2 mb-4 last:mb-0 ml-1 list-decimal list-inside">
+                              {children}
+                            </ol>
+                          ),
+                          li: ({ children }) => (
+                            <li className="text-carbon-200 leading-relaxed flex items-start gap-2">
+                              <ChevronRight className="w-4 h-4 text-accent-cyan mt-0.5 flex-shrink-0" />
+                              <span className="flex-1">{children}</span>
+                            </li>
+                          ),
+                          
+                          // Inline code
+                          code({ className, children, ...props }) {
+                            const match = /language-(\w+)/.exec(className || '')
+                            const isInline = !match && !String(children).includes('\n')
+                            
+                            if (isInline) {
+                              return (
+                                <code 
+                                  className="bg-carbon-800 px-1.5 py-0.5 rounded text-accent-cyan font-mono text-[13px] border border-carbon-700" 
+                                  {...props}
+                                >
+                                  {children}
+                                </code>
+                              )
+                            }
+                            
+                            const language = match ? match[1] : 'text'
+                            return (
+                              <div className="my-4 rounded-lg overflow-hidden border border-carbon-700 bg-carbon-950">
+                                <div className="flex items-center justify-between px-4 py-2 bg-carbon-800/50 border-b border-carbon-700">
+                                  <span className="text-xs text-carbon-400 font-mono">{language}</span>
+                                </div>
+                                <SyntaxHighlighter
+                                  style={oneDark}
+                                  language={language}
+                                  PreTag="div"
+                                  customStyle={{
+                                    margin: 0,
+                                    padding: '1rem',
+                                    background: 'transparent',
+                                    fontSize: '13px',
+                                  }}
+                                >
+                                  {String(children).replace(/\n$/, '')}
+                                </SyntaxHighlighter>
+                              </div>
+                            )
+                          },
+                          
+                          // Links
+                          a: ({ href, children }) => (
+                            <a 
+                              href={href} 
+                              className="text-accent-cyan hover:text-accent-cyan/80 underline underline-offset-2 transition-colors"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              {children}
+                            </a>
+                          ),
+                          
+                          // Strong/Bold
+                          strong: ({ children }) => (
+                            <strong className="font-semibold text-white">{children}</strong>
+                          ),
+                          
+                          // Emphasis/Italic
+                          em: ({ children }) => (
+                            <em className="italic text-carbon-300">{children}</em>
+                          ),
+                          
+                          // Blockquotes
+                          blockquote: ({ children }) => (
+                            <blockquote className="border-l-2 border-accent-violet pl-4 my-4 text-carbon-300 italic">
+                              {children}
+                            </blockquote>
+                          ),
+                          
+                          // Horizontal rule
+                          hr: () => (
+                            <hr className="my-6 border-carbon-700" />
+                          ),
+                          
+                          // Tables
+                          table: ({ children }) => (
+                            <div className="my-4 overflow-x-auto rounded-lg border border-carbon-700">
+                              <table className="w-full text-sm">
+                                {children}
+                              </table>
+                            </div>
+                          ),
+                          thead: ({ children }) => (
+                            <thead className="bg-carbon-800/50 border-b border-carbon-700">
+                              {children}
+                            </thead>
+                          ),
+                          th: ({ children }) => (
+                            <th className="px-4 py-2 text-left font-semibold text-carbon-200">
+                              {children}
+                            </th>
+                          ),
+                          td: ({ children }) => (
+                            <td className="px-4 py-2 text-carbon-300 border-t border-carbon-700/50">
+                              {children}
+                            </td>
+                          ),
+                        }}
+                      >
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
+                  ) : (
+                    <p className="leading-relaxed">{message.content}</p>
+                  )}
                 </div>
                 
-                {/* Sources */}
+                {/* Sources - Redesigned */}
                 {message.sources && message.sources.length > 0 && (
-                  <div className="mt-2 space-y-1">
-                    <p className="text-xs text-carbon-500">Sources:</p>
-                    {message.sources.map((source, idx) => (
-                      <div key={idx} className="text-xs text-carbon-400 flex items-center gap-2">
-                        <span className="text-accent-cyan font-mono">{source.file}</span>
-                      </div>
-                    ))}
+                  <div className="mt-3 p-3 rounded-xl bg-carbon-800/30 border border-carbon-700/30">
+                    <div className="flex items-center gap-2 mb-2">
+                      <FileCode className="w-3.5 h-3.5 text-carbon-400" />
+                      <span className="text-xs font-medium text-carbon-400 uppercase tracking-wide">
+                        Referenced Files
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {message.sources.map((source, idx) => (
+                        <div 
+                          key={idx} 
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-carbon-800/50 border border-carbon-700/50 hover:border-accent-cyan/30 transition-colors cursor-default"
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-accent-cyan"></span>
+                          <span className="text-xs font-mono text-carbon-300">{source.file.split('/').pop()}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
